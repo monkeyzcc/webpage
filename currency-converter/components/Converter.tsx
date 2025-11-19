@@ -11,6 +11,7 @@ const Converter: React.FC = () => {
 
   const [krakenData, setKrakenData] = useState<any>(null);
   const [wiseRate, setWiseRate] = useState<number | null>(null);
+  const [wiseFee, setWiseFee] = useState<number | null>(null);
   const [bocRate, setBocRate] = useState<number | null>(null);
 
   useEffect(() => {
@@ -25,6 +26,7 @@ const Converter: React.FC = () => {
     setError(null);
     setKrakenData(null);
     setWiseRate(null);
+    setWiseFee(null);
     setBocRate(null);
 
     try {
@@ -36,10 +38,22 @@ const Converter: React.FC = () => {
       const ticker = krakenResult[pairKey];
       setKrakenData(ticker);
 
+      // Calculate estimated GBP amount for Wise query
+      const currentUsdt = parseFloat(usdtAmount);
+      const currentKrakenPrice = parseFloat(ticker.b[0]);
+      const currentKrakenFeeRate = 0.0026;
+      const currentGbpRaw = currentUsdt * currentKrakenPrice;
+      const currentKrakenFee = currentGbpRaw * currentKrakenFeeRate;
+      const currentGbpNet = currentGbpRaw - currentKrakenFee;
+
       // 2. Wise: GBP -> HKD
       try {
-        const wiseRes = await axios.get('/api/wise');
+        // Pass the estimated GBP amount to Wise API to get accurate fee and rate
+        const wiseRes = await axios.get('/api/wise', {
+          params: { sourceAmount: currentGbpNet }
+        });
         setWiseRate(wiseRes.data.rate);
+        setWiseFee(wiseRes.data.fee);
       } catch (e) {
         console.error("Wise fetch failed", e);
         // Don't block flow, just show error for this part
@@ -77,10 +91,11 @@ const Converter: React.FC = () => {
   const krakenFee = gbpRaw * krakenFeeRate;
   const gbpNet = gbpRaw - krakenFee;
 
-  const wiseFeeFixed = 0.3;
-  const wiseFeeVarRate = 0.0043;
-  const wiseFee = gbpNet > 0 ? (gbpNet * wiseFeeVarRate + wiseFeeFixed) : 0;
-  const gbpForConversion = gbpNet - wiseFee;
+  // Use dynamic fee from API if available, otherwise 0 (or fallback logic if you prefer)
+  // The API returns the total fee in GBP
+  const currentWiseFee = wiseFee !== null ? wiseFee : 0;
+
+  const gbpForConversion = gbpNet - currentWiseFee;
   const hkdAmount = gbpForConversion > 0 && wiseRate ? gbpForConversion * wiseRate : 0;
 
   const cnyAmount = hkdAmount * (bocRate || 0);
@@ -89,7 +104,7 @@ const Converter: React.FC = () => {
   // Effective Chain Rate for GBP -> CNY = WiseRate (GBP->HKD) * BocRate (HKD->CNY)
   const gbpToCnyRate = (wiseRate || 0) * (bocRate || 0);
   const krakenFeeCny = krakenFee * gbpToCnyRate;
-  const wiseFeeCny = wiseFee * gbpToCnyRate;
+  const wiseFeeCny = currentWiseFee * gbpToCnyRate;
   const totalFeeCny = krakenFeeCny + wiseFeeCny;
 
   // Final Effective Rate Calculation
@@ -162,7 +177,23 @@ const Converter: React.FC = () => {
                 </div>
                 <div className="flex justify-between text-red-400/70">
                   <span>Fee (0.26%):</span>
-                  <span>-£{krakenFee.toFixed(2)} <span className="text-red-500/50 ml-1">(≈ ¥{krakenFeeCny.toFixed(2)})</span></span>
+                  <div className="flex items-center">
+                    <span>-£{krakenFee.toFixed(2)}</span>
+                    <span className="group relative cursor-help ml-1 border-b border-dotted border-red-500/30">
+                      (≈ ¥{krakenFeeCny.toFixed(2)})
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-max max-w-[250px] bg-gray-800 text-xs text-gray-200 p-3 rounded-xl shadow-xl z-50 border border-gray-700 backdrop-blur-md">
+                        <div className="font-bold text-white mb-1">Fee Calculation</div>
+                        <div className="space-y-1 font-mono">
+                          <div>£{krakenFee.toFixed(2)} (Fee)</div>
+                          <div>× {wiseRate?.toFixed(4) || '---'} (GBP→HKD)</div>
+                          <div>× {bocRate?.toFixed(4) || '---'} (HKD→CNY)</div>
+                          <div className="border-t border-gray-600 pt-1 mt-1 text-emerald-400">= ¥{krakenFeeCny.toFixed(4)}</div>
+                        </div>
+                        {/* Arrow */}
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+                      </div>
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -194,8 +225,24 @@ const Converter: React.FC = () => {
                   <span>£{gbpNet.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-red-400/70">
-                  <span>Est. Fee (0.43% + £0.3):</span>
-                  <span>-£{wiseFee.toFixed(2)} <span className="text-red-500/50 ml-1">(≈ ¥{wiseFeeCny.toFixed(2)})</span></span>
+                  <span>Transfer Fee:</span>
+                  <div className="flex items-center">
+                    <span>-£{currentWiseFee.toFixed(2)}</span>
+                    <span className="group relative cursor-help ml-1 border-b border-dotted border-red-500/30">
+                      (≈ ¥{wiseFeeCny.toFixed(2)})
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-max max-w-[250px] bg-gray-800 text-xs text-gray-200 p-3 rounded-xl shadow-xl z-50 border border-gray-700 backdrop-blur-md">
+                        <div className="font-bold text-white mb-1">Fee Calculation</div>
+                        <div className="space-y-1 font-mono">
+                          <div>£{currentWiseFee.toFixed(2)} (Fee)</div>
+                          <div>× {wiseRate?.toFixed(4) || '---'} (GBP→HKD)</div>
+                          <div>× {bocRate?.toFixed(4) || '---'} (HKD→CNY)</div>
+                          <div className="border-t border-gray-600 pt-1 mt-1 text-emerald-400">= ¥{wiseFeeCny.toFixed(4)}</div>
+                        </div>
+                        {/* Arrow */}
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+                      </div>
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -255,15 +302,47 @@ const Converter: React.FC = () => {
               <div className="p-4 bg-red-900/10 rounded-xl border border-red-900/20">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-red-400 font-bold">Total Fees</span>
-                  <span className="text-red-400 font-bold">- ¥{totalFeeCny.toFixed(2)}</span>
+                  <span className="group relative cursor-help border-b border-dotted border-red-500/30 text-red-400 font-bold">
+                    - ¥{totalFeeCny.toFixed(2)}
+                    <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block w-max max-w-[250px] bg-gray-800 text-xs text-gray-200 p-3 rounded-xl shadow-xl z-50 border border-gray-700 backdrop-blur-md text-left font-normal">
+                      <div className="font-bold text-white mb-1">Total Fee Calculation</div>
+                      <div className="space-y-1 font-mono">
+                        <div className="flex justify-between gap-4"><span>Kraken Fee:</span> <span>¥{krakenFeeCny.toFixed(2)}</span></div>
+                        <div className="flex justify-between gap-4"><span>Wise Fee:</span> <span>¥{wiseFeeCny.toFixed(2)}</span></div>
+                        <div className="border-t border-gray-600 pt-1 mt-1 text-emerald-400 flex justify-between gap-4"><span>Total:</span> <span>¥{totalFeeCny.toFixed(2)}</span></div>
+                      </div>
+                    </div>
+                  </span>
                 </div>
                 <div className="text-xs text-red-400/70 flex justify-between pl-4">
                   <span>Kraken Fee:</span>
-                  <span>¥{krakenFeeCny.toFixed(2)}</span>
+                  <span className="group relative cursor-help border-b border-dotted border-red-500/30">
+                    ¥{krakenFeeCny.toFixed(2)}
+                    <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block w-max max-w-[250px] bg-gray-800 text-xs text-gray-200 p-3 rounded-xl shadow-xl z-50 border border-gray-700 backdrop-blur-md text-left">
+                      <div className="font-bold text-white mb-1">Fee Calculation</div>
+                      <div className="space-y-1 font-mono">
+                        <div>£{krakenFee.toFixed(2)} (Fee)</div>
+                        <div>× {wiseRate?.toFixed(4) || '---'} (GBP→HKD)</div>
+                        <div>× {bocRate?.toFixed(4) || '---'} (HKD→CNY)</div>
+                        <div className="border-t border-gray-600 pt-1 mt-1 text-emerald-400">= ¥{krakenFeeCny.toFixed(4)}</div>
+                      </div>
+                    </div>
+                  </span>
                 </div>
                 <div className="text-xs text-red-400/70 flex justify-between pl-4">
                   <span>Wise Fee:</span>
-                  <span>¥{wiseFeeCny.toFixed(2)}</span>
+                  <span className="group relative cursor-help border-b border-dotted border-red-500/30">
+                    ¥{wiseFeeCny.toFixed(2)}
+                    <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block w-max max-w-[250px] bg-gray-800 text-xs text-gray-200 p-3 rounded-xl shadow-xl z-50 border border-gray-700 backdrop-blur-md text-left">
+                      <div className="font-bold text-white mb-1">Fee Calculation</div>
+                      <div className="space-y-1 font-mono">
+                        <div>£{currentWiseFee.toFixed(2)} (Fee)</div>
+                        <div>× {wiseRate?.toFixed(4) || '---'} (GBP→HKD)</div>
+                        <div>× {bocRate?.toFixed(4) || '---'} (HKD→CNY)</div>
+                        <div className="border-t border-gray-600 pt-1 mt-1 text-emerald-400">= ¥{wiseFeeCny.toFixed(4)}</div>
+                      </div>
+                    </div>
+                  </span>
                 </div>
               </div>
 
